@@ -1,10 +1,15 @@
-from aiohttp.test_utils import make_mocked_request
+from aiohttp.test_utils import make_mocked_request, _create_transport
+from aiohttp.http import RawRequestMessage, HttpVersion11
+from aiohttp.web import Request
+from aiohttp import hdrs
 from aiohttp.streams import EmptyStreamReader
 import asyncio
 import multidict
 import guillotina
 import os
 import yaml
+from yarl import URL
+from unittest import mock
 
 
 def headers_to_list(headers):
@@ -65,13 +70,38 @@ class AsgiApp:
         for key, value in raw_headers:
             headers.add(key.decode(), value.decode())
 
+        raw_hdrs = tuple(
+            (k.encode('utf-8'), v.encode('utf-8')) for k, v in headers.items())
+
         method = scope["method"]
         path = scope["path"]
+
+        version = HttpVersion11
+        closing = False
+        chunked = 'chunked' in headers.get(hdrs.TRANSFER_ENCODING, '').lower()
+
 
         # Aiohttp compatible StreamReader
         payload = AsgiStreamReader(receive)
 
-        request = make_mocked_request(method, path, headers=headers, payload=payload)
+        transport = _create_transport(None)
+        protocol = mock.Mock()
+        protocol.transport = transport
+        writer = mock.Mock()
+        protocol.writer = writer
+
+        message = RawRequestMessage(method, path,
+                                    version, headers,
+                                    raw_hdrs,
+                                    closing, False, False,
+                                    chunked,
+                                    URL(path))
+        task = asyncio.Task.current_task()
+        loop = asyncio.get_event_loop()
+        request = Request(message, payload,
+                          protocol, writer, task, loop,
+                          client_max_size=1024**2)
+        #request = make_mocked_request(method, path, headers=headers, payload=payload)
 
         # This is to fake IRequest interface
         request.record = lambda x: None
